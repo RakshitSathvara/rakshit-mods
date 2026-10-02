@@ -1,0 +1,6 @@
+{
+  "name": "rakshit-mods",
+  "description": "Claude Code mods by Rakshit.",
+  "owner": { "name": "Rakshit" },
+  "plugins": [{ "name": "super-bar", "source": "./super-bar" }]
+}

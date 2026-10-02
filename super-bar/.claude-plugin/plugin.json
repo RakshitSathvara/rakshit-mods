@@ -1,0 +1,7 @@
+{
+  "name": "super-bar",
+  "version": "0.1.0",
+  "description": "Claude Code's task list as a dotted progress bar above the prompt. Click it for Token Weather: context, plan limits, the last turn's tokens and what fills context.",
+  "author": { "name": "Rakshit" },
+  "types": "./types/index.d.ts"
+}
