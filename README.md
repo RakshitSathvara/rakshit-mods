@@ -11,4 +11,4 @@ Run `/reload-plugins` in any open session. When a new version comes out, run `cl
 
 ## Mods
 
-- [super-bar](super-bar/README.md): Claude Code's task list as a dotted progress bar above the prompt. Click it for Token Weather: context, plan limits, the last turn's tokens and what fills context. Needs Claude Code 2.1.287 or later, and on newer models the task tools; its README says how to turn them on.
+- [super-bar](super-bar/README.md): Claude Code's task list as a progress bar above the prompt, a pixel track in the Desktop app and dotted text in the terminal. Needs Claude Code 2.1.287 or later, and on newer models the task tools; its README says how to turn them on.

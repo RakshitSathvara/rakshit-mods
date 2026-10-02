@@ -1,70 +1,45 @@
-// Super Bar: Claude Code's task list as a dotted progress bar above the prompt.
+// Super Bar: Claude Code's task list as a progress bar above the prompt.
 //
-// Click the bar, or press 9 at an empty prompt, to open Token Weather under it:
-// the context-window forecast from the claude.dev mods tutorial, plan limits,
-// the last turn's tokens and what fills the context window. × hides the bar
-// until Claude creates the next task; /taskbar brings it back.
+// One bar for the batch of tasks Claude is working through: the task it's on, a
+// track that fills as tasks finish with a pill naming the count, and the share
+// done. The desktop draws the track as an SVG (track.mjs), the terminal as
+// dotted text (bar.mjs). × hides the bar until Claude creates the next task;
+// /taskbar brings it back.
 //
 // Needs the task tools, which Claude Code leaves out on newer models unless you
 // start it with CLAUDE_CODE_ENABLE_TODO_TOOLS=1. Without them the bar says so.
 
 import { atom, read, update } from 'claude-code'
+import { textRow } from './bar.mjs'
+import { TRACK_H, textWidth, trackSvg } from './track.mjs'
 
-// Token Weather, as the tutorial draws it.
-const HISTORY = 12
-const BARS = '▁▂▃▄▅▆▇█'
-const FORECAST = [
-  { upTo: 25, icon: '☀', word: 'Clear', color: 'yellow' },
-  { upTo: 50, icon: '☁', word: 'Cloudy', color: 'cyan' },
-  { upTo: 75, icon: '☂', word: 'Showers', color: 'blue' },
-  { upTo: 90, icon: '☇', word: 'Storm', color: 'magenta' },
-  { upTo: Infinity, icon: '↯', word: 'Compact soon', color: 'red' },
-]
-
-// The bar's palette: violet while tasks run, mint once a batch is done, slate when empty.
+// The desktop's accents: violet while tasks run, green once a batch is done.
+const RUNNING = '#8B7CF6'
+const DONE = '#30A46C'
+// The terminal bar's palette, in the same two moods.
 const VIOLET = { mark: '#a99cf7', fill: '#9a8af4', pillBg: '#7d6cf0', pillFg: '#ffffff', tick: '#e4dffd' }
 const MINT = { mark: '#6fcf97', fill: '#5bbd88', pillBg: '#3f9a68', pillFg: '#ffffff', tick: '#dcf5e7' }
-const SLATE = { mark: 'gray', fill: 'gray', pillBg: '#5c5c68', pillFg: '#ffffff', tick: 'gray' }
-// Pill text on the light named colours; white on the rest.
-const INK = { yellow: 'black', cyan: 'black', green: 'black' }
 
 const TASK_TOOLS = ['TaskCreate', 'TaskUpdate', 'TodoWrite']
 const STATUSES = ['pending', 'in_progress', 'completed']
-const LIMIT_NAMES = { five_hour: '5h limit', seven_day: '7d limit', spend_limit: 'spend' }
-const PART_NAMES = {
-  Messages: 'messages',
-  'System tools': 'tools',
-  'MCP tools': 'MCP',
-  'Memory files': 'memory',
-  'System prompt': 'system',
-  'Custom agents': 'agents',
-  Skills: 'skills',
-  'Slash commands': 'commands',
-}
-const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-const CONTROLS = 7 // "9: ▾", "×" and the gaps around them, in cells
-const META = 10 // the panel's label column
+const CLOSE = 2 // "×" and the gap before it, in cells
+// A space as wide as a digit, so '  0%' and '100%' take the same room.
+const FIGURE_SPACE = String.fromCharCode(0x2007)
 
 // Held by the host, so they survive a hot reload of this file.
 const board = atom({ plugin: 'super-bar', key: 'board' }, { tasks: [], batch: 1, toolsOn: null })
-const view = atom({ plugin: 'super-bar', key: 'view' }, { open: false, hidden: false, doneHidden: 0 })
-const weather = atom(
-  { plugin: 'super-bar', key: 'weather' },
-  { readings: [], lastTurn: null, limits: [], costUsd: null },
-)
-const detail = atom({ plugin: 'super-bar', key: 'detail' }, null)
+const view = atom({ plugin: 'super-bar', key: 'view' }, { hidden: false })
 
 export function register(on) {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     await checkTools($)
     if ((await read($, board)).tasks.length === 0) await replay($) // claude --resume / --continue
-    if ((await read($, weather)).readings.length === 0) await takeReading($, null)
     try {
       await $.command.register({
         name: 'taskbar',
-        description: 'Show the Tasks bar again, or toggle its token panel',
-        argumentHint: '[tokens|hide]',
+        description: 'Show the task bar again, or hide it',
+        argumentHint: '[hide]',
         immediate: true,
       })
     } catch {
@@ -78,7 +53,6 @@ export function register(on) {
     const result = await next(e)
     await checkTools($)
     if (e.source !== 'clear') await replay($)
-    await takeReading($, null)
     return result
   })
 
@@ -97,46 +71,28 @@ export function register(on) {
     return r
   })
 
+  // /model may have changed which tools exist.
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
-    if (!e.agentId) {
-      await takeReading($, e.usage ?? null) // main-loop turns only, not subagents
-      await checkTools($) // /model may have changed which tools exist
-      if ((await read($, view)).open) await refreshDetail($)
-    }
+    if (!e.agentId) await checkTools($) // main-loop turns only, not subagents
     return result
   })
 
   on('command.run', { command: 'taskbar' }, async ($, e) => {
-    const arg = String(e.args ?? '').trim().toLowerCase()
-    if (arg === 'hide') await hide($)
-    else if (arg === 'tokens') {
-      await update($, view, (v) => ({ ...v, hidden: false }))
-      await toggle($)
-    } else await update($, view, (v) => ({ ...v, hidden: false }))
+    const hidden = String(e.args ?? '').trim().toLowerCase() === 'hide'
+    await update($, view, (v) => ({ ...v, hidden }))
     return {}
-  })
-
-  // A click on a bar arrives from hooks/bar.mjs as a message.
-  on('ui.message', async ($, e, next) => {
-    const data = e.data
-    if (data && typeof data === 'object' && data.type === 'toggle') {
-      await toggle($)
-      return {}
-    }
-    return next(e)
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
-    const v = await read($, view)
-    if (v.hidden) return next(e)
+    if ((await read($, view)).hidden) return next(e)
     const b = await read($, board)
-    // Read the panel's values only while it's open, so a closed bar doesn't redraw for them.
-    const w = v.open ? await read($, weather) : null
-    const d = v.open ? await read($, detail) : null
+    const tasks = b.tasks.filter((t) => t.batch === b.batch)
+    // Nothing to show before Claude's first task, unless the tools are off.
+    if (tasks.length === 0 && b.toolsOn !== false) return next(e)
     const theirs = await next(e) // keep what mods after this one draw in the band
-    return band($.ui.resolve(e), e, b, v, w, d, theirs, $)
+    return band($.ui.resolve(e), e, tasks, b.batch, theirs, $)
   })
 }
 
@@ -223,334 +179,101 @@ async function checkTools($) {
   if ((await read($, board)).toolsOn !== on) await update($, board, (b) => ({ ...b, toolsOn: on }))
 }
 
-// ── Token Weather ───────────────────────────────────────────────────────────
-
-async function takeReading($, turn) {
-  let u
-  try {
-    u = await $.session.usage()
-  } catch {
-    return
-  }
-  const context = u?.context
-  await update($, weather, (w) => {
-    const next = { ...w }
-    if (context?.window) {
-      const tokens = context.tokens ?? 0
-      const percent = context.percent ?? Math.round((tokens / context.window) * 100)
-      next.readings = [...w.readings, { tokens, window: context.window, percent }].slice(-HISTORY)
-    }
-    next.limits = (u?.rateLimits ?? []).map((l) => ({
-      kind: String(l.kind),
-      percentUsed: Number(l.percentUsed) || 0,
-      resetsAt: l.resetsAt ?? null,
-    }))
-    next.costUsd = typeof u?.cost?.usd === 'number' ? u.cost.usd : null
-    if (turn) {
-      next.lastTurn = {
-        input: turn.input_tokens ?? 0,
-        output: turn.output_tokens ?? 0,
-        cacheRead: turn.cache_read_input_tokens ?? 0,
-        cacheWrite: turn.cache_creation_input_tokens ?? 0,
-        model: turn.model ?? null,
-      }
-    }
-    return next
-  })
-}
-
-// What fills the context, as /context breaks it down. 'summary' is a local
-// estimate: no token-count requests, so it's free to run after every turn.
-async function refreshDetail($) {
-  let used = []
-  try {
-    const u = await $.session.usage({ breakdown: 'summary' })
-    used = (u?.context?.breakdown?.categories ?? [])
-      .filter((c) => c.kind === 'used' && c.tokens > 0)
-      .sort((a, b) => b.tokens - a.tokens)
-      .map((c) => ({ name: String(c.name), tokens: Math.round(c.tokens) }))
-  } catch {
-    // Drawn as "not available here".
-  }
-  await update($, detail, () => ({ used }))
-}
-
-// ── Actions ─────────────────────────────────────────────────────────────────
-
-async function toggle($) {
-  const v = await update($, view, (x) => ({ ...x, open: !x.open, hidden: false }))
-  if (v.open) await refreshDetail($)
-}
-
 async function hide($) {
-  await update($, view, (x) => ({ ...x, hidden: true, open: false }))
-}
-
-async function hideDone($, batch) {
-  await update($, view, (x) => ({ ...x, doneHidden: batch }))
+  await update($, view, (x) => ({ ...x, hidden: true }))
 }
 
 // ── Drawing ─────────────────────────────────────────────────────────────────
 
-function band({ Box, Text, Button, Client }, e, b, v, w, d, theirs, $) {
-  // The band's padding takes a cell on each side, and the first row stays two
-  // cells short of the edge, where the terminal draws its close mark.
+function band(ui, e, tasks, batch, theirs, $) {
+  const { Box, Button } = ui
+  // The band's padding takes a cell on each side, and the row stays two cells
+  // short of the edge, where the terminal draws its close mark.
   const width = Math.max(24, Number(e.props.bodyColumns) || 80) - 4
-  const maxRows = Math.max(1, Number(e.props.maxRows) || 12)
-  const labelWidth = width >= 70 ? Math.min(32, Math.round(width * 0.3)) : width >= 50 ? 14 : 0
-
-  const bar = (key, row, clickable) =>
-    Client({
-      key,
-      module: './bar.mjs',
-      width: width - CONTROLS,
-      props: { labelWidth, ...row, rightWidth: 4, cols: width - CONTROLS, clickable },
-    })
-  const spacer = (n) => Text({ children: [' '.repeat(n)] })
-
-  const rows = []
-  rows.push(
-    Box({
-      flexDirection: 'row',
-      width,
-      columnGap: 1,
-      children: [
-        bar('tb-active', progress(b.tasks.filter((t) => t.batch === b.batch), b.toolsOn), true),
-        Button({
-          key: 'tb-toggle',
-          label: v.open ? '▴' : '▾',
-          hotkey: '9',
-          plain: true,
-          dimColor: true,
-          onPress: () => toggle($),
-        }),
-        Button({ key: 'tb-close', label: '×', plain: true, role: 'dismiss', dimColor: true, onPress: () => hide($) }),
-      ],
-    }),
-  )
-
-  // The batch before this one stays as a green row until you dismiss it.
-  const prev = b.tasks.filter((t) => t.batch === b.batch - 1)
-  if (prev.length > 0 && v.doneHidden !== b.batch - 1 && prev.every((t) => t.status === 'completed')) {
-    rows.push(
-      Box({
-        flexDirection: 'row',
-        width,
-        columnGap: 1,
-        children: [
-          bar('tb-done', progress(prev, true), true),
-          spacer(4),
-          Button({
-            key: 'tb-close-done',
-            label: '×',
-            plain: true,
-            dimColor: true,
-            onPress: () => hideDone($, b.batch - 1),
-          }),
-        ],
-      }),
-    )
-  }
-
-  if (v.open && w) {
-    const meter = (key, row) =>
-      Box({ flexDirection: 'row', width, columnGap: 1, children: [bar(key, row, false), spacer(CONTROLS - 1)] })
-    const line = (label, value) =>
-      Box({
-        flexDirection: 'row',
-        paddingLeft: 2,
-        children: [
-          Text({ dimColor: true, children: [label.padEnd(META + 1)] }),
-          Text({ wrap: 'truncate-end', children: [value] }),
-        ],
-      })
-    const now = w.readings[w.readings.length - 1]
-    // In priority order: the bottom rows go first when the band is short.
-    const panel = []
-    if (now) {
-      panel.push(forecastLine(Box, Text, w.readings, width))
-      panel.push(meter('tb-ctx', contextRow(now)))
-    } else {
-      panel.push(Text({ dimColor: true, children: ['  Token Weather appears after the first reply.'] }))
-    }
-    for (const l of w.limits) panel.push(meter(`tb-limit-${l.kind}`, limitRow(l)))
-    panel.push(line('last turn', turnText(w)))
-    panel.push(line('in context', partsText(d)))
-    rows.push(...panel.slice(0, Math.max(1, maxRows - rows.length)))
-  }
-
-  return Box({ flexDirection: 'column', paddingX: 1, children: [...rows, theirs] })
+  const p = tasks.length > 0 ? progress(tasks) : null
+  const close = Button({ key: 'tb-close', label: '×', plain: true, role: 'dismiss', dimColor: true, onPress: () => hide($) })
+  // Every surface but the terminal draws Svg, so they get the pixel track and the
+  // terminal gets text. Ask the surface: the table holds every constructor.
+  const row =
+    p && e.surface !== 'terminal'
+      ? Box({ key: 'tb-active', flexDirection: 'row', alignItems: 'center', gap: 1, children: [...trackRow(ui, e, p, batch), close] })
+      : Box({
+          key: 'tb-active',
+          flexDirection: 'row',
+          width,
+          columnGap: 1,
+          children: [Box({ width: width - CLOSE, children: [textRow(ui, p ? textProps(p, width) : toolsOff(), width - CLOSE)] }), close],
+        })
+  return Box({ flexDirection: 'column', paddingX: 1, children: [row, theirs] })
 }
 
-// One batch of tasks as bar props. The pill names the task you're on and the
+// One batch as the bar shows it. The pill names the task you're on and the
 // figure is the share done: 2 of 5 done reads "Tasks 3/5" and 40%.
-function progress(tasks, toolsOn) {
+function progress(tasks) {
   const n = tasks.length
-  if (n === 0 && toolsOn === false) {
-    return {
-      mark: '○',
-      markColor: SLATE.mark,
-      label: 'Tasks off',
-      labelDim: true,
-      hint: 'set CLAUDE_CODE_ENABLE_TODO_TOOLS=1 and restart Claude Code',
-      right: '',
-    }
-  }
-  if (n === 0) {
-    return {
-      mark: '○',
-      markColor: SLATE.mark,
-      label: 'No tasks yet',
-      labelDim: true,
-      fraction: 0,
-      ticks: [],
-      pill: 'Tasks 0',
-      pillShort: '0',
-      fill: SLATE.fill,
-      pillBg: SLATE.pillBg,
-      pillFg: SLATE.pillFg,
-      tickColor: SLATE.tick,
-      right: '',
-    }
-  }
   const done = tasks.filter((t) => t.status === 'completed').length
-  const ticks = Array.from({ length: n - 1 }, (_, k) => (k + 1) / n)
-  if (done === n) {
-    return {
-      mark: '✓',
-      markColor: MINT.mark,
-      label: tasks[0].subject,
-      fraction: 1,
-      ticks,
-      pill: `✓ Done ${n}/${n}`,
-      pillShort: `✓ ${n}/${n}`,
-      fill: MINT.fill,
-      pillBg: MINT.pillBg,
-      pillFg: MINT.pillFg,
-      tickColor: MINT.tick,
-      right: '100%',
-    }
-  }
   const cur =
     tasks.find((t) => t.status === 'in_progress') ?? tasks.find((t) => t.status === 'pending') ?? tasks[0]
-  const at = Math.min(done + 1, n)
+  const isDone = done === n
   return {
-    mark: '●',
-    markColor: VIOLET.mark,
-    label: cur.status === 'in_progress' && cur.activeForm ? cur.activeForm : cur.subject,
-    fraction: done / n,
-    ticks,
-    pill: `Tasks ${at}/${n}`,
-    pillShort: `${at}/${n}`,
-    fill: VIOLET.fill,
-    pillBg: VIOLET.pillBg,
-    pillFg: VIOLET.pillFg,
-    tickColor: VIOLET.tick,
-    right: `${Math.round((done / n) * 100)}%`,
+    n,
+    done,
+    isDone,
+    at: Math.min(done + 1, n),
+    pct: Math.round((done / n) * 100),
+    label: isDone ? tasks[0].subject : cur.status === 'in_progress' && cur.activeForm ? cur.activeForm : cur.subject,
   }
 }
 
-// The context meter: ticks where the forecast changes, the pill in its colour.
-function contextRow(now) {
-  const f = forecast(now.percent)
-  return {
-    mark: ' ',
-    label: 'context',
-    labelWidth: META,
-    labelDim: true,
-    fraction: now.percent / 100,
-    ticks: [0.25, 0.5, 0.75, 0.9],
-    pill: `${f.icon} ${short(now.tokens)}`,
-    pillShort: f.icon,
-    fill: f.color,
-    pillBg: f.color,
-    pillFg: INK[f.color] ?? 'white',
-    tickColor: 'white',
-    right: `${now.percent}%`,
-  }
-}
-
-function limitRow(l) {
-  const pct = Math.max(0, Math.round(l.percentUsed))
-  const color = pct >= 80 ? 'red' : pct >= 50 ? 'yellow' : 'green'
-  const at = resetTime(l)
-  return {
-    mark: ' ',
-    label: LIMIT_NAMES[l.kind] ?? l.kind.replace(/_/g, ' '),
-    labelWidth: META,
-    labelDim: true,
-    fraction: pct / 100,
-    ticks: [],
-    pill: at ? `resets ${at}` : `${pct}%`,
-    pillShort: at ? at.split(' ').pop() : `${pct}%`,
-    fill: color,
-    pillBg: color,
-    pillFg: INK[color] ?? 'white',
-    right: `${pct}%`,
-  }
-}
-
-// Local time: "14:30" for the 5-hour window, "Mon 09:00" for longer ones.
-function resetTime(l) {
-  if (!l.resetsAt) return ''
-  const t = new Date(l.resetsAt)
-  if (Number.isNaN(t.getTime())) return ''
-  const hm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`
-  return l.kind === 'five_hour' ? hm : `${DAYS[t.getDay()]} ${hm}`
-}
-
-function turnText(w) {
-  const cost = typeof w.costUsd === 'number' ? `   ≈ $${w.costUsd.toFixed(2)} this session` : ''
-  const t = w.lastTurn
-  if (!t) return `no finished turn yet${cost}`
-  return `in ${short(t.input)}  out ${short(t.output)}  cache read ${short(t.cacheRead)}  cache write ${short(t.cacheWrite)}${cost}`
-}
-
-function partsText(d) {
-  if (d === null) return 'measuring…'
-  if (d.used.length === 0) return 'not available here'
-  return d.used
-    .slice(0, 6)
-    .map((p) => `${PART_NAMES[p.name] ?? p.name.toLowerCase()} ${short(p.tokens)}`)
-    .join('  ')
-}
-
-// The tutorial's forecast line, unchanged apart from its indent.
-function forecastLine(Box, Text, history, columns) {
-  const now = history[history.length - 1]
-  const f = forecast(now.percent)
-  const parts = [
-    Text({ color: f.color, bold: true, children: [`${f.icon}  ${f.word}`] }),
-    Text({ children: [`  ${now.percent}% of context`] }),
-    Text({ dimColor: true, children: [`  ${short(now.tokens)} / ${short(now.window)}`] }),
+// The desktop row, as plan-progress lays it out: the state, the task, then the
+// track pinned right at a width that fits, and the share done. The desktop
+// reports about 8 CSS pixels per column.
+function trackRow({ Box, Text, Svg }, e, p, batch) {
+  const color = p.isDone ? DONE : RUNNING
+  const total = Math.max(320, (Number(e.props.bodyColumns) || 100) * 8)
+  const titleW = Math.min(Math.round(total * 0.3), Math.round(textWidth(p.label, 6.4)))
+  const trackW = Math.max(120, Math.min(1400, total - titleW - 140))
+  const alt = p.isDone ? `${p.label}: all ${p.n} tasks done` : `${p.label}: task ${p.at} of ${p.n}, ${p.pct}% done`
+  const source = trackSvg({ id: String(batch), total: p.n, finished: p.done, isDone: p.isDone, color }, trackW)
+  return [
+    Text({ color, children: [p.isDone ? '✓' : '●'] }),
+    Text({ wrap: 'truncate', children: [p.label] }),
+    Box({ flexGrow: 1 }),
+    Svg({ source, alt, width: trackW, height: TRACK_H }),
+    Text({ dimColor: true, children: [`${String(p.pct).padStart(3, FIGURE_SPACE)}%`] }),
   ]
-  if (columns >= 60) {
-    parts.push(Text({ dimColor: true, children: ['   last turns '] }))
-    parts.push(Text({ color: f.color, children: [sparkline(history)] }))
-    if (history.length > 1) parts.push(Text({ dimColor: true, children: [trend(history)] }))
+}
+
+// The terminal row's props for bar.mjs.
+function textProps(p, width) {
+  const c = p.isDone ? MINT : VIOLET
+  return {
+    mark: p.isDone ? '✓' : '●',
+    markColor: c.mark,
+    label: p.label,
+    labelWidth: width >= 70 ? Math.min(32, Math.round(width * 0.3)) : width >= 50 ? 14 : 0,
+    fraction: p.done / p.n,
+    ticks: Array.from({ length: p.n - 1 }, (_, k) => (k + 1) / p.n),
+    pill: p.isDone ? `✓ Done ${p.n}/${p.n}` : `Tasks ${p.at}/${p.n}`,
+    pillShort: p.isDone ? `✓ ${p.n}/${p.n}` : `${p.at}/${p.n}`,
+    fill: c.fill,
+    pillBg: c.pillBg,
+    pillFg: c.pillFg,
+    tickColor: c.tick,
+    right: `${p.pct}%`,
+    rightWidth: 4,
   }
-  return Box({ flexDirection: 'row', paddingLeft: 2, children: parts })
 }
 
-function forecast(percent) {
-  return FORECAST.find((b) => percent < b.upTo)
-}
-
-function sparkline(history) {
-  const top = Math.max(...history.map((r) => r.tokens), 1)
-  return history.map((r) => BARS[Math.floor((r.tokens / top) * (BARS.length - 1))]).join('')
-}
-
-function trend(history) {
-  const delta = history[history.length - 1].tokens - history[history.length - 2].tokens
-  if (delta === 0) return '  steady'
-  return delta > 0 ? `  ▲ +${short(delta)} last turn` : `  ▼ ${short(-delta)} last turn`
-}
-
-function short(n) {
-  if (n >= 1_000_000) return `${+(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${+(n / 1_000).toFixed(1)}k`
-  return String(n)
+function toolsOff() {
+  return {
+    mark: '○',
+    markColor: 'gray',
+    label: 'Tasks off',
+    labelDim: true,
+    hint: 'set CLAUDE_CODE_ENABLE_TODO_TOOLS=1 and restart Claude Code',
+    right: '',
+  }
 }
 
 function nextId(tasks) {

@@ -1,49 +1,21 @@
-// Super Bar surface module.
+// Super Bar's terminal bar.
 //
 // Draws one dotted progress row: a mark, a label, a braille-dot bar with tick
-// marks and a pill riding the fill's edge, then a figure on the right. When the
-// row is clickable, a click on it posts { type: 'toggle' } to the hooks module.
-// A surface module has no $: it draws with surface.elements and reaches
-// tasks-bar.mjs only through surface.post.
+// marks and a pill riding the fill's edge, then a figure on the right. The
+// hooks module draws it straight into the band with its own element table;
+// the desktop draws track.mjs's SVG instead.
 
 const DOT = '⣿'
 const TICK = '│'
 const TRACK = 'gray'
 
-export default function Bar(props, surface) {
-  const { Box, Text } = surface.elements
-  const p = props ?? {}
-  const look = surface.state ?? {}
-  // The hooks module sizes the region (Client width) and passes the same figure
-  // as `cols`, so the row fills it exactly whatever a surface reports first.
-  const cols = Math.max(8, Number(p.cols) || surface.columns || 60)
-  if (p.clickable) listen(surface, cols)
-  return Box({ flexDirection: 'row', children: runs(Text, layout(p, look, cols)) })
-}
-
-// A press that starts and ends on the row is a click. Hover lights the row.
-function listen(surface, cols) {
-  surface.onPointer((ev) => {
-    const now = surface.state ?? {}
-    if (ev.type === 'enter' || ev.type === 'leave') {
-      const hot = ev.type === 'enter'
-      if (Boolean(now.hot) !== hot) surface.setState({ ...now, hot })
-      return
-    }
-    if (ev.type === 'down') {
-      if (ev.button !== 'right') surface.setState({ ...now, pressed: true })
-      return
-    }
-    if (ev.type === 'up' && now.pressed) {
-      const inside = ev.x >= 0 && ev.y >= 0 && ev.x < cols && (surface.rows <= 0 || ev.y < surface.rows)
-      surface.setState({ ...now, pressed: false })
-      if (inside) surface.post({ type: 'toggle' })
-    }
-  })
+// The row as Text runs in a Box, sized to `cols` cells.
+export function textRow({ Box, Text }, props, cols) {
+  return Box({ flexDirection: 'row', children: runs(Text, layout(props ?? {}, Math.max(8, cols))) })
 }
 
 // The row as styled segments, left to right, sized to `cols` cells.
-function layout(p, look, cols) {
+function layout(p, cols) {
   const segs = []
   const add = (text, style = {}) => {
     if (text) segs.push({ text, ...style })
@@ -72,18 +44,18 @@ function layout(p, look, cols) {
   add(`${String(p.mark ?? ' ')} `, { color: p.markColor })
   if (labelW > 0) {
     const text = fit(String(p.label ?? ''), labelW)
-    add(text, { color: p.labelColor, dim: Boolean(p.labelDim), underline: Boolean(look.hot) })
+    add(text, { color: p.labelColor, dim: Boolean(p.labelDim) })
     add(' '.repeat(labelW - Array.from(text).length + 1))
   }
   if (p.hint) add(fit(String(p.hint), track).padEnd(track), { color: TRACK })
-  else bar(segs, p, look, track, pill)
+  else bar(segs, p, track, pill)
   if (rightW > 0) add(` ${right.padStart(rightW)}`, { color: p.rightColor, dim: !p.rightColor })
   return segs
 }
 
 // Dots up to the fill's edge, dim dots after it, ticks at the boundaries, and the
 // pill centred on the edge so it sits where the work is (clamped at both ends).
-function bar(segs, p, look, T, pill) {
+function bar(segs, p, T, pill) {
   if (T <= 0) return
   const P = Math.min(pill.length, T)
   const filled = Math.round(clamp01(p.fraction) * T)
@@ -96,9 +68,9 @@ function bar(segs, p, look, T, pill) {
       continue
     }
     const lit = i < filled
-    if (ticks.has(i)) segs.push({ text: TICK, color: lit ? p.tickColor : TRACK, dim: !lit && !look.hot })
-    else if (lit) segs.push({ text: DOT, color: p.fill, dim: !look.hot && speckle(i) })
-    else segs.push({ text: DOT, color: TRACK, dim: !look.hot })
+    if (ticks.has(i)) segs.push({ text: TICK, color: lit ? p.tickColor : TRACK, dim: !lit })
+    else if (lit) segs.push({ text: DOT, color: p.fill, dim: speckle(i) })
+    else segs.push({ text: DOT, color: TRACK, dim: true })
   }
 }
 
@@ -134,7 +106,7 @@ function fit(text, w) {
 function runs(Text, segs) {
   const merged = []
   for (const s of segs) {
-    const key = `${s.color ?? ''}|${s.bg ?? ''}|${s.dim ? 1 : 0}|${s.bold ? 1 : 0}|${s.underline ? 1 : 0}`
+    const key = `${s.color ?? ''}|${s.bg ?? ''}|${s.dim ? 1 : 0}|${s.bold ? 1 : 0}`
     const last = merged[merged.length - 1]
     if (last && last.key === key) last.text += s.text
     else merged.push({ ...s, key })
@@ -145,7 +117,6 @@ function runs(Text, segs) {
     if (s.bg) props.backgroundColor = s.bg
     if (s.dim) props.dimColor = true
     if (s.bold) props.bold = true
-    if (s.underline) props.underline = true
     return Text(props)
   })
 }

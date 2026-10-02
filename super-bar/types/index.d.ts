@@ -20,40 +20,15 @@ export type SuperBarBoard = {
 }
 
 export type SuperBarView = {
-  open: boolean
+  /** Hidden with × until Claude creates the next task, or until /taskbar. */
   hidden: boolean
-  /** The finished batch whose row was dismissed. */
-  doneHidden: number
 }
-
-export type SuperBarReading = { tokens: number; window: number; percent: number }
-
-export type SuperBarTurn = {
-  input: number
-  output: number
-  cacheRead: number
-  cacheWrite: number
-  model: string | null
-}
-
-export type SuperBarLimit = { kind: string; percentUsed: number; resetsAt: string | null }
-
-export type SuperBarWeather = {
-  readings: SuperBarReading[]
-  lastTurn: SuperBarTurn | null
-  limits: SuperBarLimit[]
-  costUsd: number | null
-}
-
-export type SuperBarDetail = { used: { name: string; tokens: number }[] }
 
 declare module 'claude-code' {
   interface PluginState {
     'super-bar': {
       board: SuperBarBoard
       view: SuperBarView
-      weather: SuperBarWeather
-      detail: SuperBarDetail | null
     }
   }
 }
