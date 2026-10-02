@@ -1,6 +1,6 @@
 {
   "name": "super-bar",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Claude Code's task list as a progress bar above the prompt: a pixel track in the Desktop app, dotted text in the terminal.",
   "author": { "name": "Rakshit" },
   "types": "./types/index.d.ts"

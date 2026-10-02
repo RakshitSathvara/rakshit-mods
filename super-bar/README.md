@@ -6,7 +6,7 @@ A Claude Code mod that draws the session's task list as a progress bar above the
 ● Running tests      ⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿ Tasks 3/5 ⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿   40% ×
 ```
 
-The pill names the task Claude is on and the figure is the share done, so two of five done reads `Tasks 3/5` and `40%`. The Desktop app draws the track as a pixel bar; the terminal draws it as dotted text, as above. A finished batch turns green (`✓ Done 9/9`) and stays until you dismiss it or Claude starts new tasks.
+The pill names the task Claude is on and the figure is the share done, so two of five done reads `Tasks 3/5` and `40%`. The Desktop app draws the track as a pixel bar; the terminal draws it as dotted text, as above. Once every task in the batch is done the bar goes away, until Claude starts new tasks.
 
 ## Before you start
 

@@ -93,35 +93,26 @@ test('desktop: the track is a picture with the pill, between the task and the sh
   await ui.unmount()
 })
 
-test('a finished batch turns green, and the next batch takes its place', async ($, on) => {
-  stubs(on)
-  await start($)
-  await fiveTasks($)
-  for (const id of ['3', '4', '5']) await mark($, id, 'completed')
-  const ui = await $.ui.mount(band('terminal'))
-  expect(await ui.find({ type: 'Text', text: /✓ Done 5\/5/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /100%/ })).toBeDefined()
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`${surface}: a finished batch leaves the band, and the next task brings the bar back`, async ($, on) => {
+    stubs(on)
+    await start($)
+    await fiveTasks($)
+    const ui = await $.ui.mount(band(surface))
+    for (const id of ['3', '4']) await mark($, id, 'completed')
+    expect(await ui.find({ key: 'tb-active' })).toBeDefined()
 
-  await create($, 'Open the pull request')
-  expect(await ui.find({ type: 'Text', text: /Tasks 1\/1/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /0%/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /Done/ })).toBeUndefined()
-  await ui.unmount()
-})
+    await mark($, '5', 'completed')
+    expect(await ui.find({ key: 'tb-active' })).toBeUndefined()
 
-test('desktop: a finished batch shows a check and Done on a green track', async ($, on) => {
-  stubs(on)
-  await start($)
-  await fiveTasks($)
-  for (const id of ['3', '4', '5']) await mark($, id, 'completed')
-  const ui = await $.ui.mount(band('desktop'))
-  const t = await track(ui)
-  expect(t?.source).toMatch(/>Done<tspan[^>]*>5\/5</)
-  expect(t?.source).toContain('#30A46C')
-  expect(t?.alt).toBe('Read the auth module: all 5 tasks done')
-  expect(await ui.find({ type: 'Text', text: /100%/ })).toBeDefined()
-  await ui.unmount()
-})
+    await create($, 'Open the pull request')
+    expect(await ui.find({ type: 'Text', text: /Open the pull request/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /0%/ })).toBeDefined()
+    if (surface === 'desktop') expect((await track(ui))?.alt).toBe('Open the pull request: task 1 of 1, 0% done')
+    else expect(await ui.find({ type: 'Text', text: /Tasks 1\/1/ })).toBeDefined()
+    await ui.unmount()
+  })
+}
 
 test('× hides the bar until Claude creates the next task', async ($, on) => {
   stubs(on)

@@ -2,9 +2,9 @@
 //
 // One bar for the batch of tasks Claude is working through: the task it's on, a
 // track that fills as tasks finish with a pill naming the count, and the share
-// done. The desktop draws the track as an SVG (track.mjs), the terminal as
-// dotted text (bar.mjs). × hides the bar until Claude creates the next task;
-// /taskbar brings it back.
+// done. It goes once every task in the batch is done. The desktop draws the
+// track as an SVG (track.mjs), the terminal as dotted text (bar.mjs). × hides
+// the bar until Claude creates the next task; /taskbar brings it back.
 //
 // Needs the task tools, which Claude Code leaves out on newer models unless you
 // start it with CLAUDE_CODE_ENABLE_TODO_TOOLS=1. Without them the bar says so.
@@ -13,12 +13,9 @@ import { atom, read, update } from 'claude-code'
 import { textRow } from './bar.mjs'
 import { TRACK_H, textWidth, trackSvg } from './track.mjs'
 
-// The desktop's accents: violet while tasks run, green once a batch is done.
-const RUNNING = '#8B7CF6'
-const DONE = '#30A46C'
-// The terminal bar's palette, in the same two moods.
+// The desktop track's accent, and the terminal bar's palette in the same violet.
+const ACCENT = '#8B7CF6'
 const VIOLET = { mark: '#a99cf7', fill: '#9a8af4', pillBg: '#7d6cf0', pillFg: '#ffffff', tick: '#e4dffd' }
-const MINT = { mark: '#6fcf97', fill: '#5bbd88', pillBg: '#3f9a68', pillFg: '#ffffff', tick: '#dcf5e7' }
 
 const TASK_TOOLS = ['TaskCreate', 'TaskUpdate', 'TodoWrite']
 const STATUSES = ['pending', 'in_progress', 'completed']
@@ -89,8 +86,10 @@ export function register(on) {
     if ((await read($, view)).hidden) return next(e)
     const b = await read($, board)
     const tasks = b.tasks.filter((t) => t.batch === b.batch)
-    // Nothing to show before Claude's first task, unless the tools are off.
+    // Nothing to show before Claude's first task (unless the tools are off), or
+    // once every task in the batch is done.
     if (tasks.length === 0 && b.toolsOn !== false) return next(e)
+    if (tasks.length > 0 && tasks.every((t) => t.status === 'completed')) return next(e)
     const theirs = await next(e) // keep what mods after this one draw in the band
     return band($.ui.resolve(e), e, tasks, b.batch, theirs, $)
   })
@@ -214,14 +213,12 @@ function progress(tasks) {
   const done = tasks.filter((t) => t.status === 'completed').length
   const cur =
     tasks.find((t) => t.status === 'in_progress') ?? tasks.find((t) => t.status === 'pending') ?? tasks[0]
-  const isDone = done === n
   return {
     n,
     done,
-    isDone,
     at: Math.min(done + 1, n),
     pct: Math.round((done / n) * 100),
-    label: isDone ? tasks[0].subject : cur.status === 'in_progress' && cur.activeForm ? cur.activeForm : cur.subject,
+    label: cur.status === 'in_progress' && cur.activeForm ? cur.activeForm : cur.subject,
   }
 }
 
@@ -229,14 +226,13 @@ function progress(tasks) {
 // track pinned right at a width that fits, and the share done. The desktop
 // reports about 8 CSS pixels per column.
 function trackRow({ Box, Text, Svg }, e, p, batch) {
-  const color = p.isDone ? DONE : RUNNING
   const total = Math.max(320, (Number(e.props.bodyColumns) || 100) * 8)
   const titleW = Math.min(Math.round(total * 0.3), Math.round(textWidth(p.label, 6.4)))
   const trackW = Math.max(120, Math.min(1400, total - titleW - 140))
-  const alt = p.isDone ? `${p.label}: all ${p.n} tasks done` : `${p.label}: task ${p.at} of ${p.n}, ${p.pct}% done`
-  const source = trackSvg({ id: String(batch), total: p.n, finished: p.done, isDone: p.isDone, color }, trackW)
+  const alt = `${p.label}: task ${p.at} of ${p.n}, ${p.pct}% done`
+  const source = trackSvg({ id: String(batch), total: p.n, finished: p.done, color: ACCENT }, trackW)
   return [
-    Text({ color, children: [p.isDone ? '✓' : '●'] }),
+    Text({ color: ACCENT, children: ['●'] }),
     Text({ wrap: 'truncate', children: [p.label] }),
     Box({ flexGrow: 1 }),
     Svg({ source, alt, width: trackW, height: TRACK_H }),
@@ -246,20 +242,19 @@ function trackRow({ Box, Text, Svg }, e, p, batch) {
 
 // The terminal row's props for bar.mjs.
 function textProps(p, width) {
-  const c = p.isDone ? MINT : VIOLET
   return {
-    mark: p.isDone ? '✓' : '●',
-    markColor: c.mark,
+    mark: '●',
+    markColor: VIOLET.mark,
     label: p.label,
     labelWidth: width >= 70 ? Math.min(32, Math.round(width * 0.3)) : width >= 50 ? 14 : 0,
     fraction: p.done / p.n,
     ticks: Array.from({ length: p.n - 1 }, (_, k) => (k + 1) / p.n),
-    pill: p.isDone ? `✓ Done ${p.n}/${p.n}` : `Tasks ${p.at}/${p.n}`,
-    pillShort: p.isDone ? `✓ ${p.n}/${p.n}` : `${p.at}/${p.n}`,
-    fill: c.fill,
-    pillBg: c.pillBg,
-    pillFg: c.pillFg,
-    tickColor: c.tick,
+    pill: `Tasks ${p.at}/${p.n}`,
+    pillShort: `${p.at}/${p.n}`,
+    fill: VIOLET.fill,
+    pillBg: VIOLET.pillBg,
+    pillFg: VIOLET.pillFg,
+    tickColor: VIOLET.tick,
     right: `${p.pct}%`,
     rightWidth: 4,
   }

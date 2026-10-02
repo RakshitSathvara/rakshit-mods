@@ -7,7 +7,6 @@
 
 export const TRACK_H = 22
 const NARROW = 360 // below this the pill becomes a dot with the task number
-const CHECK = 'M20 6 9 17l-5-5'
 
 const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16))
 const mix = (a, b, m) => a.map((v, i) => Math.round(v + ((b[i] ?? 0) - v) * m))
@@ -29,12 +28,12 @@ export const textWidth = (s, px = 6.7) =>
 // Where each batch's head was last drawn, so a redraw glides from there.
 const lastHead = new Map()
 
-// One batch, W pixels wide: { id, total, finished, isDone, color }.
+// One batch, W pixels wide: { id, total, finished, color }.
 export function trackSvg(t, W) {
   const H = TRACK_H
   const total = Math.max(1, t.total)
   // The fill is exactly the finished share: a fresh batch starts empty.
-  const fx = (t.isDone ? 1 : Math.min(1, t.finished / total)) * W
+  const fx = Math.min(1, t.finished / total) * W
   const from = lastHead.get(t.id) ?? fx
   lastHead.set(t.id, fx)
 
@@ -47,15 +46,15 @@ export function trackSvg(t, W) {
   // Pixels on a 3px grid, 7 rows, denser and closer to the accent towards the head.
   const buckets = [0, 1, 2, 3, 4].map((b) => {
     const m = b / 4
-    const dense = t.isDone ? 0.8 : 0.22 + 0.78 * Math.pow(m, 1.5)
-    return { color: rgb(t.isDone ? light : mix(grey, light, m)), opacity: (0.35 + 0.65 * dense).toFixed(2) }
+    const dense = 0.22 + 0.78 * Math.pow(m, 1.5)
+    return { color: rgb(mix(grey, light, m)), opacity: (0.35 + 0.65 * dense).toFixed(2) }
   })
   let px = ''
   for (let col = 0; col * 3 < fx; col++) {
     const x = col * 3
     const u = Math.min(1, (x + 1.5) / fx)
-    const dense = t.isDone ? 0.8 : 0.22 + 0.78 * Math.pow(u, 1.5)
-    const bucket = t.isDone ? 4 : Math.min(4, Math.floor(Math.min(1, Math.pow(u, 0.9) * 1.1) * 4.99))
+    const dense = 0.22 + 0.78 * Math.pow(u, 1.5)
+    const bucket = Math.min(4, Math.floor(Math.min(1, Math.pow(u, 0.9) * 1.1) * 4.99))
     for (let r = 0; r < 7; r++) {
       if (hash(col, r, 1) > dense + 0.1) continue
       px += `<rect x="${x}" y="${1 + r * 3}" class="b${bucket} t${Math.floor(hash(col, r, 2) * 4)}"/>`
@@ -71,39 +70,28 @@ export function trackSvg(t, W) {
     marks += `<rect x="${(x - 0.75).toFixed(1)}" y="${(H - 8) / 2}" width="1.5" height="8" rx=".75" fill="${fill}" opacity="${passed ? 0.6 : 0.45}"/>`
   }
 
-  // The knob: a pill with "Tasks 3/5" or a check and "Done 5/5", or a round dot when narrow.
+  // The knob: a pill with "Tasks 3/5", or a round dot with the number when narrow.
   const number = Math.min(total, t.finished + 1)
   let knob
   let kw = H
   if (W < NARROW) {
-    knob = `<circle cx="0" cy="${H / 2}" r="${H / 2}" fill="${t.color}"/>${
-      t.isDone
-        ? `<path d="${CHECK}" transform="translate(-6 5) scale(.5)" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`
-        : `<text x="0" y="${H / 2 + 4.2}" text-anchor="middle" class="kt">${number}</text>`
-    }`
+    knob = `<circle cx="0" cy="${H / 2}" r="${H / 2}" fill="${t.color}"/><text x="0" y="${H / 2 + 4.2}" text-anchor="middle" class="kt">${number}</text>`
   } else {
-    const name = t.isDone ? 'Done' : 'Tasks'
-    const count = t.isDone ? `${total}/${total}` : `${number}/${total}`
-    const iconW = t.isDone ? 16 : 0
-    kw = Math.round(20 + iconW + textWidth(name) + 6 + textWidth(count, 6.5))
-    const left = -kw / 2 + 10
+    const count = `${number}/${total}`
+    kw = Math.round(20 + textWidth('Tasks') + 6 + textWidth(count, 6.5))
     knob = `<rect x="${-kw / 2}" y="0" width="${kw}" height="${H}" rx="${H / 2}" fill="${t.color}"/>`
-    if (t.isDone) {
-      knob += `<path d="${CHECK}" transform="translate(${left} 5) scale(.5)" fill="none" stroke="#fff" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>`
-    }
-    knob += `<text x="${left + iconW}" y="${H / 2 + 4.2}" class="kt">${name}<tspan class="kc" dx="6">${count}</tspan></text>`
+    knob += `<text x="${-kw / 2 + 10}" y="${H / 2 + 4.2}" class="kt">Tasks<tspan class="kc" dx="6">${count}</tspan></text>`
   }
   const clampX = (x) => Math.max(kw / 2, Math.min(W - kw / 2, x))
   const kx = clampX(fx)
   const kFrom = clampX(from)
 
-  const d = t.isDone
   const style = `<style>
 ${buckets.map((b, i) => `.b${i}{fill:${b.color};fill-opacity:${b.opacity}}`).join('')}
 rect[class]{width:2px;height:2px}
-.t0,.t1,.t2,.t3{animation:tw ${d ? 3.2 : 2.2}s ease-in-out infinite}
-.t1{animation-duration:${d ? 3.8 : 2.8}s;animation-delay:-.7s}.t2{animation-duration:${d ? 4.4 : 1.9}s;animation-delay:-1.3s}.t3{animation-duration:${d ? 3.5 : 3.3}s;animation-delay:-.4s}
-@keyframes tw{0%,100%{opacity:1}50%{opacity:${d ? 0.8 : 0.45}}}
+.t0,.t1,.t2,.t3{animation:tw 2.2s ease-in-out infinite}
+.t1{animation-duration:2.8s;animation-delay:-.7s}.t2{animation-duration:1.9s;animation-delay:-1.3s}.t3{animation-duration:3.3s;animation-delay:-.4s}
+@keyframes tw{0%,100%{opacity:1}50%{opacity:.45}}
 .kt{font:500 12px 'Anthropic Sans',ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;fill:#fff}
 .kc{font-weight:400;fill-opacity:.75}
 @media (prefers-reduced-motion:reduce){.t0,.t1,.t2,.t3{animation:none}}
@@ -117,7 +105,7 @@ rect[class]{width:2px;height:2px}
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${style}
 <defs><clipPath id="pill"><rect width="${W}" height="${H}" rx="${H / 2}"/></clipPath><clipPath id="fill"><rect width="${fx.toFixed(1)}" height="${H}">${glideFill}</rect></clipPath>
-<linearGradient id="base" x1="0" x2="${fx.toFixed(1)}" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="${rgb(acc)}" stop-opacity="${d ? 0.3 : 0.05}"/><stop offset="1" stop-color="${rgb(acc)}" stop-opacity=".33"/></linearGradient></defs>
+<linearGradient id="base" x1="0" x2="${fx.toFixed(1)}" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="${rgb(acc)}" stop-opacity=".05"/><stop offset="1" stop-color="${rgb(acc)}" stop-opacity=".33"/></linearGradient></defs>
 <g clip-path="url(#pill)"><rect width="${W}" height="${H}" fill="#808080" fill-opacity=".16"/>
 <g clip-path="url(#fill)"><rect width="${fx.toFixed(1)}" height="${H}" fill="url(#base)"/>${px}</g>${marks}</g>
 <g transform="translate(${kx.toFixed(1)} 0)">${glideKnob}${knob}</g></svg>`
